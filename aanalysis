@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rosslyn开发项目高度与阴影深度分析</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 React 和 ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- 引入 Babel 用于解析 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        /* 简单的滑动条样式 */
+        input[type=range] {
+            -webkit-appearance: none; 
+            background: transparent; 
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #2563EB;
+            cursor: pointer;
+            margin-top: -6px; 
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #BFDBFE;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo } = React;
+
+        // --- 图标组件定义 (替代 lucide-react 库) ---
+        const Compass = ({ size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+        );
+        const Info = ({ size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        );
+        const Clock = ({ size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        );
+        const ArrowUpRight = ({ size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
+        );
+        const Maximize2 = ({ size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        );
+        const Building2 = ({ size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg>
+        );
+        const Home = ({ size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        );
+
+        // --- 主应用逻辑 ---
+        const App = () => {
+          const [timeOfDay, setTimeOfDay] = useState(14); // 24-hour format
+          
+          // 核心数据坐标 (相对位置，单位：像素/米)
+          // 增加了一些偏移以适应全屏布局
+          const HOUSE_POS = { x: 300, y: 450 }; // 1830 N Ode St
+          
+          const projects = [
+            {
+              id: 'one_rosslyn',
+              name: 'One Rosslyn (Rosslyn Gateway)',
+              description: '包含三座塔楼：北塔、南塔及住宅楼。',
+              height: '300 ft (约 28 层)',
+              distance: '约 750 ft (0.14 miles)',
+              direction: '东北 (NE)',
+              pos: { x: 550, y: 250 }, // 调整了坐标以适应更大的画布
+              realHeight: 300,
+              color: 'bg-blue-500'
+            },
+            {
+              id: 'potomac_overlook',
+              name: 'Potomac Overlook (原马里奥特)',
+              description: '大规模住宅群，最高达30层。',
+              height: '320 ft (约 30 层)',
+              distance: '约 1,800 ft (0.34 miles)',
+              direction: '北 (North)',
+              pos: { x: 320, y: 80 },
+              realHeight: 320,
+              color: 'bg-purple-500'
+            },
+            {
+              id: 'rosslyn_heights',
+              name: 'Rosslyn Heights (现有公寓)',
+              description: '紧邻你房子的现有高层公寓。',
+              height: '120 ft (约 12 层)',
+              distance: '约 150 ft',
+              direction: '东 (East)',
+              pos: { x: 420, y: 450 },
+              realHeight: 120,
+              color: 'bg-gray-400'
+            }
+          ];
+
+          // 计算阴影角度和长度
+          const getShadowStyle = (height) => {
+            // 简化版阴影模型：早晨阴影向西偏长，中午短，下午向东偏长
+            const angle = (timeOfDay - 12) * 15; // 每小时15度
+            const length = Math.abs(timeOfDay - 12) * (height / 6); // 稍微增加阴影长度比例
+            const blur = length / 5;
+            const opacity = 0.3;
+            
+            const rad = (angle + 90) * (Math.PI / 180);
+            const shadowX = -Math.cos(rad) * length;
+            const shadowY = Math.sin(rad) * length;
+            
+            return {
+              width: `${length}px`,
+              transform: `rotate(${angle + 90}deg)`,
+              transformOrigin: 'left center',
+              backgroundColor: `rgba(0, 0, 0, ${opacity})`,
+              filter: `blur(${blur}px)`,
+              position: 'absolute',
+              height: '20px',
+              top: '50%',
+              left: '50%',
+              zIndex: 10,
+              pointerEvents: 'none', // 让阴影不阻挡鼠标事件
+              transition: 'all 0.5s ease-in-out'
+            };
+          };
+
+          return (
+            <div className="flex flex-col h-screen bg-slate-50 text-slate-900 font-sans p-4 md:p-8">
+              {/* 头部信息 */}
+              <div className="mb-6 flex-shrink-0">
+                <h1 className="text-2xl font-bold flex items-center gap-2">
+                  <Building2 className="text-blue-600" />
+                  1830 N Ode St 周边高度与阴影深度分析报告 (全屏交互版)
+                </h1>
+                <p className="text-slate-500 mt-1">Rosslyn 核心区未来 5 年超高层项目空间位置分析</p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-grow overflow-hidden h-full">
+                
+                {/* 左侧：交互式模拟地图 */}
+                <div className="lg:col-span-2 bg-white rounded-2xl shadow-xl border border-slate-200 relative overflow-hidden flex flex-col h-full">
+                  <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center z-20">
+                    <div className="flex items-center gap-4">
+                      <span className="text-sm font-semibold flex items-center gap-1 min-w-[120px]">
+                        <Clock size={16} /> 模拟时间: {timeOfDay}:00
+                      </span>
+                      <input 
+                        type="range" 
+                        min="8" 
+                        max="18" 
+                        value={timeOfDay} 
+                        onChange={(e) => setTimeOfDay(parseInt(e.target.value))}
+                        className="w-48 h-2 bg-blue-200 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      <Compass size={14} /> 北方向上
+                    </div>
+                  </div>
+
+                  <div className="relative flex-grow bg-slate-100 p-8 overflow-hidden w-full h-full">
+                    {/* 背景网格装饰 */}
+                    <div className="absolute inset-0" style={{backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '20px 20px', opacity: 0.5}}></div>
+
+                    {/* 背景街道简化线 */}
+                    <div className="absolute top-0 bottom-0 left-[300px] w-16 bg-slate-200 -rotate-12 opacity-50 border-x-2 border-white border-dashed"></div> {/* N Ode St示意 */}
+                    <div className="absolute top-[440px] left-0 right-0 h-14 bg-slate-200 rotate-2 opacity-50 border-y-2 border-white border-dashed"></div> {/* 18th St示意 */}
+
+                    {/* 1830 N Ode St (房子) */}
+                    <div 
+                      className="absolute z-40 transition-all duration-300"
+                      style={{ left: HOUSE_POS.x, top: HOUSE_POS.y }}
+                    >
+                      <div className="relative group">
+                        <div className="w-10 h-10 bg-orange-500 rounded-sm shadow-lg flex items-center justify-center text-white ring-4 ring-orange-200 animate-pulse-slow">
+                          <Home size={20} />
+                        </div>
+                        <div className="absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap bg-orange-600 text-white text-[12px] px-2 py-1 rounded shadow-md font-bold z-50">
+                          1830 N Ode St (你的房子)
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 其它开发项目 */}
+                    {projects.map((proj) => (
+                      <div 
+                        key={proj.id}
+                        className="absolute z-30 transition-all duration-500"
+                        style={{ left: proj.pos.x, top: proj.pos.y }}
+                      >
+                        {/* 阴影绘制 */}
+                        <div style={getShadowStyle(proj.realHeight)}></div>
+                        
+                        {/* 建筑实体 */}
+                        <div className="relative group">
+                          <div className={`w-16 h-16 ${proj.color} rounded-md shadow-2xl flex items-center justify-center text-white transform hover:scale-110 transition-transform cursor-pointer border-2 border-white flex-col gap-1`}>
+                            <Building2 size={24} />
+                            <span className="text-[10px] font-bold opacity-80">{proj.height.split(' ')[0]}</span>
+                          </div>
+                          <div className="absolute -top-16 left-1/2 -translate-x-1/2 w-56 bg-white p-3 rounded-lg shadow-xl border border-slate-200 hidden group-hover:block z-50">
+                            <p className="font-bold text-sm text-slate-800">{proj.name}</p>
+                            <div className="mt-1 grid grid-cols-2 gap-2 text-[10px] text-slate-500">
+                                <span>高度: {proj.height}</span>
+                                <span>距离: {proj.distance}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* 图例提示器 */}
+                    <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur p-3 rounded-lg text-xs border border-slate-200 shadow-lg">
+                      <p className="font-semibold mb-1">图例指南</p>
+                      <div className="flex items-center gap-2 mb-1"><div className="w-3 h-3 bg-orange-500 rounded-sm"></div> 你的位置</div>
+                      <div className="flex items-center gap-2 mb-1"><div className="w-3 h-3 bg-blue-500 rounded-sm"></div> 规划中高层</div>
+                      <div className="flex items-center gap-2"><div className="w-3 h-3 bg-gray-400 rounded-sm"></div> 现有建筑</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 右侧：数据卡片 */}
+                <div className="flex flex-col gap-4 overflow-y-auto pr-2 h-full">
+                  {projects.map((proj) => (
+                    <div key={proj.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 hover:border-blue-300 transition-colors cursor-default">
+                      <div className="flex justify-between items-start mb-2">
+                        <span className={`px-2 py-1 rounded text-[10px] text-white font-bold ${proj.color}`}>
+                          {proj.id === 'rosslyn_heights' ? '现有' : '规划中'}
+                        </span>
+                        <span className="text-xs font-mono text-slate-400 border px-1 rounded">{proj.direction}</span>
+                      </div>
+                      <h3 className="font-bold text-slate-800 text-sm mb-1">{proj.name}</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs text-slate-600">
+                          <Maximize2 size={14} className="text-slate-400" />
+                          <span>高度: <span className="text-slate-900 font-semibold">{proj.height}</span></span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-slate-600">
+                          <ArrowUpRight size={14} className="text-slate-400" />
+                          <span>直线距离: <span className="text-slate-900 font-semibold">{proj.distance}</span></span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-relaxed italic bg-slate-50 p-2 rounded border border-slate-100">
+                          {proj.description}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="mt-auto bg-blue-50 border border-blue-100 p-4 rounded-xl shadow-sm">
+                    <h4 className="text-sm font-bold text-blue-800 flex items-center gap-1 mb-2">
+                      <Info size={16} /> 阴影分析结论
+                    </h4>
+                    <ul className="text-[11px] text-blue-700 space-y-2 list-disc pl-4 leading-relaxed">
+                      <li><strong>早晨 (8-10 AM):</strong> 东侧现有的 Rosslyn Heights 会投下最长阴影，此时对 1830 N Ode St 的采光影响最大。</li>
+                      <li><strong>下午 (2-4 PM):</strong> One Rosslyn 虽然很高，但因其位于东北向，下午的阴影会向东侧延展，<strong>基本不会</strong>遮挡你房子的阳光。</li>
+                      <li><strong>北侧项目:</strong> Potomac Overlook 因距离较远且在北侧，完全不影响你的日照，但在高层视野中会成为主导背景。</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
